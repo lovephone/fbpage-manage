@@ -1561,16 +1561,15 @@ async function postNow(pid) {
       const totalSize   = file.size;
       const totalChunks = Math.ceil(totalSize / CHUNK);
 
-      // Phase 1: init
+      // Phase 1: init — รับ upload_session_id กลับมา (FB API ใหม่ไม่ส่ง upload_url)
       setProgress(pid, 0, `เริ่ม upload session (${(totalSize/1024/1024).toFixed(1)} MB)...`);
       const init = await proxyCall({ action:'reel_init', pageId:page.pageId, token:page.token, fileSize:totalSize });
-      if (!init.video_id || !init.upload_url) throw new Error('Facebook ไม่ส่ง upload_url: ' + JSON.stringify(init));
+      if (!init.video_id && !init.upload_session_id) throw new Error('Facebook ไม่ส่ง session: ' + JSON.stringify(init));
 
-      const uploadSessionId = init.video_id;
-      const uploadUrl       = init.upload_url;
-      let   startOffset     = 0;
+      const uploadSessionId = init.upload_session_id || init.video_id;
+      let   startOffset     = parseInt(init.start_offset || '0');
 
-      // Phase 2: chunks
+      // Phase 2: chunks — ส่งทีละ 3MB ผ่าน proxy
       for (let i = 0; i < totalChunks; i++) {
         const end   = Math.min(startOffset + CHUNK, totalSize);
         const chunk = file.slice(startOffset, end);
@@ -1582,19 +1581,22 @@ async function postNow(pid) {
           action: 'reel_chunk',
           pageId: page.pageId,
           token:  page.token,
-          uploadUrl,
           uploadSessionId,
           chunkBase64,
           startOffset,
           totalSize,
         });
         if (chunkRes.error) throw new Error('chunk ' + (i+1) + ': ' + chunkRes.error.message);
-        startOffset = parseInt(chunkRes.start_offset ?? end);
+        // FB ส่ง start_offset ถัดไปมาให้ ใช้ end เป็น fallback
+        const nextOffset = parseInt(chunkRes.start_offset ?? end);
+        startOffset = nextOffset;
+        if (nextOffset >= totalSize) break; // อัพโหลดครบแล้ว
       }
 
       // Phase 3: finish + schedule/publish
       setProgress(pid, 90, scheduledTime ? 'กำลังตั้งเวลา Reel...' : 'กำลัง publish Reel...');
       const fin = await proxyCall({ action:'reel_finish', pageId:page.pageId, token:page.token, uploadSessionId, description:caption, scheduledTime });
+      if (fin.error) throw new Error('Finish: ' + fin.error.message);
       postId = fin.video_id || uploadSessionId;
     }
 
