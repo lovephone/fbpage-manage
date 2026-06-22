@@ -56,7 +56,7 @@ header h1{font-size:16px;font-weight:600}
 .sidebar-nav-btn{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;border:none;background:transparent;cursor:pointer;width:100%;text-align:left;color:var(--text2);font-size:13px}
 .sidebar-nav-btn:hover{background:var(--bg2)}
 .sidebar-nav-btn.active{background:var(--bg3);color:var(--text);font-weight:500}
-.content{flex:1;min-width:0;padding:20px 20px}
+.content{flex:1;min-width:0;padding:20px 20px 80px}
 @media(max-width:700px){
   .sidebar{display:none}
   .content{padding:16px}
@@ -290,7 +290,19 @@ svg.icon{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;str
   <span class="save-badge" id="save-badge">✓ บันทึกแล้ว</span>
 </header>
 
-<div class="app-body">
+<div id="upload-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:999;background:var(--fb);color:#fff;padding:10px 20px;display:none;align-items:center;gap:12px;box-shadow:0 -2px 12px rgba(0,0,0,.2)">
+  <svg style="width:18px;height:18px;fill:none;stroke:#fff;stroke-width:2;flex-shrink:0;animation:spin 1s linear infinite" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+  <div style="flex:1;min-width:0">
+    <div id="upload-banner-label" style="font-size:13px;font-weight:500">กำลังอัพโหลด...</div>
+    <div style="background:rgba(255,255,255,.3);border-radius:99px;height:4px;margin-top:4px">
+      <div id="upload-banner-bar" style="background:#fff;height:4px;border-radius:99px;width:0%;transition:width .3s"></div>
+    </div>
+  </div>
+  <div id="upload-banner-pct" style="font-size:13px;font-weight:600;flex-shrink:0">0%</div>
+</div>
+<style>
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
   <!-- SIDEBAR -->
   <div class="sidebar" id="sidebar">
     <div class="sidebar-label">เพจ</div>
@@ -1276,9 +1288,47 @@ function schedStatus(scheduledAt, status) {
   return {dotClass:'dot-scheduled', labelClass:'label-scheduled', label:'⏳ รอโพสต์'};
 }
 
-// per-page file store (File objects, not saved to localStorage)
-const pageFiles    = {};
-const uploadingPids = new Set(); // pid ที่กำลัง upload อยู่ → ห้าม rebuild DOM
+// ── Upload state management ────────────────────────────────────────
+const pageFiles     = {};
+const uploadingPids = new Set();
+// บันทึก upload progress ลง localStorage เพื่อแสดงเมื่อกลับมา
+const UPLOAD_STATE_KEY = 'fb_upload_state';
+
+function saveUploadState(pid, state) {
+  try {
+    const all = JSON.parse(localStorage.getItem(UPLOAD_STATE_KEY) || '{}');
+    all[pid] = { ...state, ts: Date.now() };
+    localStorage.setItem(UPLOAD_STATE_KEY, JSON.stringify(all));
+  } catch(e) {}
+}
+
+function clearUploadState(pid) {
+  try {
+    const all = JSON.parse(localStorage.getItem(UPLOAD_STATE_KEY) || '{}');
+    delete all[pid];
+    localStorage.setItem(UPLOAD_STATE_KEY, JSON.stringify(all));
+  } catch(e) {}
+}
+
+function getUploadStates() {
+  try {
+    const all = JSON.parse(localStorage.getItem(UPLOAD_STATE_KEY) || '{}');
+    // ลบ state เก่ากว่า 2 ชั่วโมง
+    const now = Date.now();
+    Object.keys(all).forEach(k => { if (now - all[k].ts > 7200000) delete all[k]; });
+    return all;
+  } catch(e) { return {}; }
+}
+
+// เตือนถ้า refresh ขณะ upload
+window.addEventListener('beforeunload', (e) => {
+  if (uploadingPids.size > 0) {
+    e.preventDefault();
+    e.returnValue = 'กำลังอัพโหลดวิดีโออยู่ — ถ้าออกไปข้อมูลจะหาย';
+    return e.returnValue;
+  }
+});
+
 
 function setPostType(pid, type) {
   pagePostType[pid] = type;
@@ -1351,12 +1401,32 @@ function clearFile(pid) {
 }
 
 function setProgress(pid, pct, label) {
+  // card progress bar
   const wrap = document.getElementById('prog-'+pid);
-  const bar = document.getElementById('progbar-'+pid);
-  const lbl = document.getElementById('proglabel-'+pid);
+  const bar  = document.getElementById('progbar-'+pid);
+  const lbl  = document.getElementById('proglabel-'+pid);
   if (wrap) wrap.classList.toggle('show', pct >= 0);
-  if (bar) bar.style.width = pct + '%';
-  if (lbl) lbl.textContent = label;
+  if (bar)  bar.style.width = pct + '%';
+  if (lbl)  lbl.textContent = label;
+
+  // sticky bottom banner (แสดงแม้ scroll ออก หรือ switch tab)
+  const banner    = document.getElementById('upload-banner');
+  const bannerBar = document.getElementById('upload-banner-bar');
+  const bannerLbl = document.getElementById('upload-banner-label');
+  const bannerPct = document.getElementById('upload-banner-pct');
+  if (banner) {
+    if (pct >= 0) {
+      banner.style.display = 'flex';
+      if (bannerBar) bannerBar.style.width = pct + '%';
+      if (bannerLbl) bannerLbl.textContent = label;
+      if (bannerPct) bannerPct.textContent = pct + '%';
+      // บันทึกลง localStorage
+      saveUploadState(pid, { pct, label });
+    } else {
+      banner.style.display = 'none';
+      clearUploadState(pid);
+    }
+  }
 }
 
 function showPostResult(pid, type, msg) {
