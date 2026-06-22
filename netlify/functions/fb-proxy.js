@@ -175,11 +175,13 @@ exports.handler = async (event) => {
 
     // ── REEL: Step 2 — Upload chunk ───────────────────────
     if (action === "reel_chunk") {
-      const { uploadUrl, chunkBase64, startOffset, totalSize, uploadSessionId } = body;
-      if (!chunkBase64) return { statusCode:400, headers:CORS, body:JSON.stringify({ error:{message:"chunkBase64 required"} }) };
+      const { chunkBase64, startOffset, totalSize, uploadSessionId } = body;
+      if (!chunkBase64) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: { message: "chunkBase64 required" } }) };
       const chunkBuf = Buffer.from(chunkBase64, "base64");
+      // ใช้ endpoint คงที่ ไม่ต้องการ uploadUrl จาก client
+      const uploadUrl = `https://graph-video.facebook.com/v19.0/${pageId}/videos`;
       const res = await fbVideoChunk(uploadUrl, chunkBuf, startOffset, totalSize, uploadSessionId, token);
-      return { statusCode:200, headers:CORS, body:JSON.stringify(res) };
+      return { statusCode: 200, headers: CORS, body: JSON.stringify(res) };
     }
 
     // ── REEL: Step 3 — Finish + publish / schedule ────────
