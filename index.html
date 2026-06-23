@@ -1451,7 +1451,8 @@ function showPostResult(pid, type, msg) {
 
 function isFuture(dtVal) {
   if (!dtVal) return false;
-  return new Date(dtVal) > new Date();
+  // Facebook กำหนด scheduled_publish_time ต้องอย่างน้อย 10 นาทีในอนาคต
+  return new Date(dtVal) > new Date(Date.now() + 10 * 60 * 1000);
 }
 
 function updateSmartBtn(pid) {
@@ -1596,10 +1597,16 @@ async function postNow(pid) {
 
   if (postType !== 'article' && !file) { alert('กรุณาเลือกไฟล์ก่อนโพสต์'); return; }
 
-  // คำนวณ scheduledTime (Unix timestamp) ถ้าตั้งเวลาในอนาคต
+  // คำนวณ scheduledTime (Unix timestamp) ถ้าตั้งเวลาในอนาคต >= 10 นาที
   let scheduledTime = null;
   if (dtVal && isFuture(dtVal)) {
     scheduledTime = Math.floor(new Date(dtVal).getTime() / 1000);
+  } else if (dtVal && new Date(dtVal) > new Date()) {
+    // มีเวลา แต่น้อยกว่า 10 นาที
+    showPostResult(pid, 'err', '⚠ Facebook กำหนดต้องตั้งเวลาล่วงหน้าอย่างน้อย 10 นาที กรุณาเลือกเวลาใหม่');
+    if (btn) btn.disabled = false;
+    uploadingPids.delete(pid);
+    return;
   }
 
   if (btn) btn.disabled = true;
@@ -1640,28 +1647,30 @@ async function postNow(pid) {
       const uploadSessionId = init.upload_session_id || init.video_id;
       let   startOffset     = parseInt(init.start_offset || '0');
 
-      // Phase 2: chunks — ส่งทีละ 3MB ผ่าน proxy
+      // Phase 2: chunks — ส่งเป็น binary ผ่าน /fb-chunk (เร็วกว่า base64 JSON 33%)
       for (let i = 0; i < totalChunks; i++) {
         const end   = Math.min(startOffset + CHUNK, totalSize);
         const chunk = file.slice(startOffset, end);
         const pct   = Math.round(5 + (i / totalChunks) * 80);
         setProgress(pid, pct, `chunk ${i+1}/${totalChunks} — ${(end/1024/1024).toFixed(1)}/${(totalSize/1024/1024).toFixed(1)} MB`);
 
-        const chunkBase64 = await blobToBase64(chunk);
-        const chunkRes = await proxyCall({
-          action: 'reel_chunk',
-          pageId: page.pageId,
-          token:  page.token,
-          uploadSessionId,
-          chunkBase64,
-          startOffset,
-          totalSize,
+        // ส่ง binary ตรง ไม่แปลงเป็น base64
+        const chunkRes = await fetch('/.netlify/functions/fb-chunk', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'video/mp4',
+            'X-Upload-Session-Id': uploadSessionId,
+            'X-Start-Offset':      String(startOffset),
+            'X-Page-Id':           page.pageId,
+            'X-Token':             page.token,
+          },
+          body: chunk,
         });
-        if (chunkRes.error) throw new Error('chunk ' + (i+1) + ': ' + chunkRes.error.message);
-        // FB ส่ง start_offset ถัดไปมาให้ ใช้ end เป็น fallback
-        const nextOffset = parseInt(chunkRes.start_offset ?? end);
+        const chunkData = await chunkRes.json();
+        if (chunkData.error) throw new Error('chunk ' + (i+1) + ': ' + chunkData.error.message);
+        const nextOffset = parseInt(chunkData.start_offset ?? end);
         startOffset = nextOffset;
-        if (nextOffset >= totalSize) break; // อัพโหลดครบแล้ว
+        if (nextOffset >= totalSize) break;
       }
 
       // Phase 3: finish + schedule/publish

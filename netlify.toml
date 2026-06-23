@@ -2,6 +2,12 @@
   publish = "."
   functions = "netlify/functions"
 
+[functions."fb-proxy"]
+  timeout = 26
+
+[functions."fb-chunk"]
+  timeout = 26
+
 [[headers]]
   for = "/*"
   [headers.values]
