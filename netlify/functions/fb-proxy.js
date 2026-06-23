@@ -187,14 +187,16 @@ exports.handler = async (event) => {
     // ── REEL: Step 3 — Finish + publish / schedule ────────
     if (action === "reel_finish") {
       const { uploadSessionId, description, scheduledTime } = body;
+      // scheduledTime ต้องเป็น number > 0 จึงจะตั้งเวลาได้
+      const isScheduled = scheduledTime && Number(scheduledTime) > 0;
       const params = {
         upload_phase:      "finish",
         upload_session_id: uploadSessionId,
-        video_state:       scheduledTime ? "SCHEDULED" : "PUBLISHED",
+        video_state:       isScheduled ? "SCHEDULED" : "PUBLISHED",
         description:       description || "",
         access_token:      token,
       };
-      if (scheduledTime) params.scheduled_publish_time = String(scheduledTime);
+      if (isScheduled) params.scheduled_publish_time = String(scheduledTime);
       const paramStr = enc(params);
       const res = await new Promise((resolve, reject) => {
         const buf = Buffer.from(paramStr, "utf8");

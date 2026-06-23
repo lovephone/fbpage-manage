@@ -1597,16 +1597,22 @@ async function postNow(pid) {
 
   if (postType !== 'article' && !file) { alert('กรุณาเลือกไฟล์ก่อนโพสต์'); return; }
 
-  // คำนวณ scheduledTime (Unix timestamp) ถ้าตั้งเวลาในอนาคต >= 10 นาที
+  // คำนวณ scheduledTime (Unix timestamp)
+  // datetime-local input ให้ค่าเป็น local time → ต้องแปลงให้ถูก timezone
   let scheduledTime = null;
-  if (dtVal && isFuture(dtVal)) {
-    scheduledTime = Math.floor(new Date(dtVal).getTime() / 1000);
-  } else if (dtVal && new Date(dtVal) > new Date()) {
-    // มีเวลา แต่น้อยกว่า 10 นาที
-    showPostResult(pid, 'err', '⚠ Facebook กำหนดต้องตั้งเวลาล่วงหน้าอย่างน้อย 10 นาที กรุณาเลือกเวลาใหม่');
-    if (btn) btn.disabled = false;
-    uploadingPids.delete(pid);
-    return;
+  if (dtVal) {
+    // แปลง "2026-06-23T14:00" เป็น local Date (ไม่ใช่ UTC)
+    const localDate = new Date(dtVal); // JS parse datetime-local เป็น local time อยู่แล้ว
+    const minInFuture = (localDate - Date.now()) / 60000; // นาทีในอนาคต
+    if (minInFuture >= 10) {
+      scheduledTime = Math.floor(localDate.getTime() / 1000);
+    } else if (minInFuture > 0) {
+      showPostResult(pid, 'err', `⚠ ต้องตั้งเวลาล่วงหน้าอย่างน้อย 10 นาที (ตอนนี้ตั้ง ${Math.round(minInFuture)} นาที)`);
+      if (btn) btn.disabled = false;
+      uploadingPids.delete(pid);
+      return;
+    }
+    // minInFuture <= 0 = เวลาผ่านแล้ว → โพสต์เดี๋ยวนี้ (scheduledTime = null)
   }
 
   if (btn) btn.disabled = true;
