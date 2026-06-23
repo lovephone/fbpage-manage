@@ -1647,27 +1647,45 @@ async function postNow(pid) {
       const uploadSessionId = init.upload_session_id || init.video_id;
       let   startOffset     = parseInt(init.start_offset || '0');
 
-      // Phase 2: chunks — ส่งเป็น binary ผ่าน /fb-chunk (เร็วกว่า base64 JSON 33%)
+      // Phase 2: chunks — ส่ง binary ผ่าน /fb-chunk พร้อม retry 3 ครั้ง
       for (let i = 0; i < totalChunks; i++) {
         const end   = Math.min(startOffset + CHUNK, totalSize);
         const chunk = file.slice(startOffset, end);
         const pct   = Math.round(5 + (i / totalChunks) * 80);
         setProgress(pid, pct, `chunk ${i+1}/${totalChunks} — ${(end/1024/1024).toFixed(1)}/${(totalSize/1024/1024).toFixed(1)} MB`);
 
-        // ส่ง binary ตรง ไม่แปลงเป็น base64
-        const chunkRes = await fetch('/.netlify/functions/fb-chunk', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'video/mp4',
-            'X-Upload-Session-Id': uploadSessionId,
-            'X-Start-Offset':      String(startOffset),
-            'X-Page-Id':           page.pageId,
-            'X-Token':             page.token,
-          },
-          body: chunk,
+        // token ส่งผ่าน query string (หลีก Netlify header size limit)
+        const params = new URLSearchParams({
+          session_id:   uploadSessionId,
+          start_offset: String(startOffset),
+          page_id:      page.pageId,
+          token:        page.token,
         });
-        const chunkData = await chunkRes.json();
-        if (chunkData.error) throw new Error('chunk ' + (i+1) + ': ' + chunkData.error.message);
+
+        let chunkData = null;
+        let lastErr   = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const chunkRes = await fetch(`/.netlify/functions/fb-chunk?${params}`, {
+              method:  'POST',
+              headers: { 'Content-Type': 'video/mp4' },
+              body:    chunk,
+            });
+            if (!chunkRes.ok) throw new Error(`HTTP ${chunkRes.status}`);
+            chunkData = await chunkRes.json();
+            if (chunkData.error) throw new Error(chunkData.error.message || JSON.stringify(chunkData.error));
+            lastErr = null;
+            break; // สำเร็จ
+          } catch(e) {
+            lastErr = e;
+            if (attempt < 3) {
+              setProgress(pid, pct, `chunk ${i+1} retry ${attempt}/3...`);
+              await new Promise(r => setTimeout(r, 1500 * attempt));
+            }
+          }
+        }
+        if (lastErr) throw new Error(`chunk ${i+1} failed after 3 attempts: ${lastErr.message}`);
+
         const nextOffset = parseInt(chunkData.start_offset ?? end);
         startOffset = nextOffset;
         if (nextOffset >= totalSize) break;
